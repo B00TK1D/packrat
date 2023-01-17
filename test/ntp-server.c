@@ -34,7 +34,7 @@ int main() {
     unsigned int delta;
     int id;
 
-    char pending = 0;
+    char pending = 1;
 
     srand(time(NULL));
 
@@ -98,6 +98,8 @@ int main() {
 
                 buffer[2] = sleep_level;
                 buffer[47] = buffer[46] ^ buffer[45] ^ buffer[44] ^ pending;
+
+                pending--;
             }
 
             // Send NTP packet
