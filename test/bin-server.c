@@ -164,7 +164,7 @@ int main() {
                 char* line = NULL;
                 size_t len = 0;
                 getline(&line, &len, stdin);
-                line[strlen(line) - 1] = '\0';
+                //line[strlen(line) - 1] = '\0';
                 int sent = sendto(conn, line, strlen(line), 0, (struct sockaddr*)&cliaddr, cliaddr_len);
                 if (sent < 0) {
                     connected = 0;

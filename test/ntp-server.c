@@ -99,7 +99,7 @@ int main() {
                 buffer[2] = sleep_level;
                 buffer[47] = buffer[46] ^ buffer[45] ^ buffer[44] ^ pending;
 
-                pending--;
+                pending = 0;
             }
 
             // Send NTP packet
