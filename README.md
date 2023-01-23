@@ -7,7 +7,7 @@ Deep peristence management system
 
 ## Installation
 
-
+Pretty simple: `make`
 
 
 ## Example usage
@@ -29,3 +29,10 @@ Deep peristence management system
 15. Exit session console with the `exit` command
 16. Exit beacon console with the `exit` command
 17. Exit packrat console with the `exit` command
+
+
+## TODO
+* Encryption (both binary and resulting sessions)
+* Option for remote binary execution
+* Create run flag for direct, n-line output (don't generate session)
+* Pre-staged scripts on beacon connect
